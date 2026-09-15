@@ -79,7 +79,7 @@ const initializeApp = async () => {
   try {
     console.log("🔧 Initializing database...");
     await initializeDatabase();
-    console.log("✅ Database initialized successfully");
+    console.log("✅ Database initialized is successfully");
   } catch (error) {
     console.error("❌ Database initialization failed:", error);
     process.exit(1);

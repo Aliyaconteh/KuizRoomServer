@@ -2,12 +2,13 @@ const QuizRepository = require("./quiz.repository");
 
 class QuizService {
 
-  async createQuiz({ title, created_by }) {
+  async createQuiz({ title, description, created_by }) {
     if (!title) throw new Error("Quiz title is required");
     if (!created_by) throw new Error("Host authentication is required");
 
     return await QuizRepository.createQuiz({
       title,
+      description: description ? String(description).trim() : null,
       created_by
     });
   }

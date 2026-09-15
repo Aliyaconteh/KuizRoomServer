@@ -43,6 +43,8 @@ class SyncRepository {
     if (total === 0) {
       return {
         totalEvents: 0,
+        successfulSubmissions: 0,
+        rejectedSubmissions: 0,
         averageLatencyMs: 0,
         reconciliationCount: 0,
         mismatchCount: 0,
@@ -61,6 +63,8 @@ class SyncRepository {
     }
 
     const latencySum = logs.reduce((sum, row) => sum + Number(row.latency || 0), 0);
+    const successfulSubmissions = logs.filter((row) => row.event_type === "answer-submission").length;
+    const rejectedSubmissions = logs.filter((row) => String(row.event_type || "").startsWith("rejected-")).length;
     const reconciliationCount = logs.filter((row) => row.reconciliation_required).length;
     const mismatchCount = logs.filter((row) => Number(row.score_difference || 0) !== 0).length;
     const consistencyRatePct = Math.round(((total - mismatchCount) / total) * 10000) / 100;
@@ -137,6 +141,8 @@ class SyncRepository {
 
     return {
       totalEvents: total,
+      successfulSubmissions,
+      rejectedSubmissions,
       averageLatencyMs: total ? Math.round(latencySum / total) : 0,
       reconciliationCount,
       mismatchCount,

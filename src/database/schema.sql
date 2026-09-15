@@ -29,6 +29,7 @@ create table room_players (
 create table quizzes (
   id uuid primary key default gen_random_uuid(),
   title text not null,
+  description text,
   created_by uuid references users(id),
   created_at timestamp default now()
 );

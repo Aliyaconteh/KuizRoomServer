@@ -132,6 +132,7 @@ class QuizRepository {
       .select(`
         id,
         title,
+        description,
         created_by,
         created_at,
         questions(id)

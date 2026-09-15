@@ -35,6 +35,11 @@ class GameSocketHandler {
         return;
       }
 
+      if (!socket.playerId || String(socket.playerId) !== String(room.host_id)) {
+        socket.emit("error", { message: "Only the person who created the room can start the quiz" });
+        return;
+      }
+
       const { data: questions, error: questionError } = await supabaseAdmin
         .from("questions")
         .select("*")
@@ -184,6 +189,11 @@ class GameSocketHandler {
 
       const receivedAt = Date.now();
       if (roomState.questionEndTime && receivedAt > roomState.questionEndTime) {
+        await this.logRejectedSubmission(roomState, null, question, {
+          reason: "time-expired",
+          clientTimestamp,
+          receivedAt
+        });
         socket.emit("submission_rejected", {
           reason: "Time is up for this question",
           timestamp: receivedAt
@@ -204,6 +214,11 @@ class GameSocketHandler {
 
       const answerKey = `${player.id}:${question.id}`;
       if (roomState.submittedAnswers.has(answerKey)) {
+        await this.logRejectedSubmission(roomState, player, question, {
+          reason: "duplicate-submission",
+          clientTimestamp,
+          receivedAt: Date.now()
+        });
         socket.emit("submission_rejected", {
           reason: "Answer already submitted for this question",
           timestamp: Date.now()
@@ -415,6 +430,12 @@ class GameSocketHandler {
   }
 
   async handleQuizEnd(socket, { roomCode }) {
+    const roomState = this.rooms.get(roomCode);
+    if (roomState && String(socket.playerId) !== String(roomState.hostId)) {
+      socket.emit("error", { message: "Only the host can end the quiz" });
+      return;
+    }
+
     await this.handleQuizCompletion(roomCode);
   }
 
@@ -445,6 +466,32 @@ class GameSocketHandler {
     this.io.to(roomCode).emit("leaderboard-update", { leaderboard: players });
     this.io.to(roomCode).emit("leaderboardUpdated", { leaderboard: players });
     return players;
+  }
+
+  async logRejectedSubmission(roomState, player, question, details = {}) {
+    try {
+      await supabaseAdmin
+        .from("synchronization_logs")
+        .insert([{
+          room_id: roomState.id,
+          player_id: player?.id || null,
+          user_id: null,
+          question_id: question?.id || null,
+          sync_mode: roomState.syncMode,
+          event_type: `rejected-${details.reason || "submission"}`,
+          delay_level: roomState.delayLevel,
+          artificial_delay_ms: roomState.delayMs,
+          client_timestamp: Number(details.clientTimestamp || details.receivedAt || Date.now()),
+          server_timestamp: Number(details.receivedAt || Date.now()),
+          latency: Math.max(0, Number(details.receivedAt || Date.now()) - Number(details.clientTimestamp || details.receivedAt || Date.now())),
+          predicted_score: 0,
+          server_score: Number(player?.score || 0),
+          reconciliation_required: false,
+          score_difference: 0
+        }]);
+    } catch (err) {
+      console.error("Failed to log rejected submission:", err.message);
+    }
   }
 
   async findPlayer(roomId, username, playerId) {
@@ -528,7 +575,5 @@ module.exports = (io, socket) => {
 };
 
 module.exports.GameSocketHandler = GameSocketHandler;
-
-
 
 

@@ -3,7 +3,7 @@ const QuizService = require("./quiz.service");
 class QuizController {
   async create(req, res) {
     try {
-      const { title } = req.body;
+      const { title, description } = req.body;
       const hostId = req.user?.id;
 
       if (!title) {
@@ -15,6 +15,7 @@ class QuizController {
 
       const quiz = await QuizService.createQuiz({
         title,
+        description,
         created_by: hostId
       });
 
@@ -79,7 +80,7 @@ class QuizController {
 
   async update(req, res) {
     try {
-      const quiz = await QuizService.updateQuiz(req.params.id, req.body);
+      const quiz = await QuizService.updateQuiz(req.params.id, req.body, req.user?.id);
 
       return res.json({
         success: true,

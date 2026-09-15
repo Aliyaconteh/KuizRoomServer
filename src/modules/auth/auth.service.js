@@ -71,11 +71,16 @@ class AuthService {
       .eq("email", email)
       .single();
 
-    if (!user || error) {
-      throw new Error("Invalid email or password");
+    if (error) {
+      // PGRST116 means zero rows found (not a database failure, but invalid user)
+      if (error.code === "PGRST116") {
+        throw new Error("Invalid email or password");
+      }
+      console.error("[AUTH_SERVICE] Database lookup error:", error);
+      throw new Error(`Database error during authentication: ${error.message}`);
     }
 
-    if (!user.password_hash) {
+    if (!user || !user.password_hash) {
       throw new Error("Invalid email or password");
     }
 

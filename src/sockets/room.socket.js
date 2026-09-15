@@ -37,6 +37,7 @@ module.exports = (io, socket) => {
       });
 
       socket.join(room.room_code);
+      socket.playerId = hostId;
 
       callback({
         success: true,
@@ -60,6 +61,8 @@ module.exports = (io, socket) => {
       const result = await RoomService.joinRoom(roomCode, player);
 
       socket.join(roomCode);
+      socket.playerId = result.player.user_id;
+      socket.username = result.player.username;
 
       callback({
         success: true,
