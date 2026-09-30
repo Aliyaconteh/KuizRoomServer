@@ -71,6 +71,10 @@ class RoomService {
     );
 
     if (existingPlayer) {
+      if (String(existingPlayer.user_id) !== String(user.id || user.userId || user.hostId || "")) {
+        throw new Error("That username is already being used in this room");
+      }
+
       return {
         room,
         player: existingPlayer

@@ -35,7 +35,7 @@ class GameSocketHandler {
         return;
       }
 
-      if (!socket.playerId || String(socket.playerId) !== String(room.host_id)) {
+      if (!socket.user?.userId || String(socket.user.userId) !== String(room.host_id)) {
         socket.emit("error", { message: "Only the person who created the room can start the quiz" });
         return;
       }
@@ -87,7 +87,7 @@ class GameSocketHandler {
 
     socket.join(roomCode);
     socket.username = username || socket.username || "Guest";
-    socket.playerId = playerId || socket.playerId || socket.id;
+    socket.playerId = socket.user?.userId || playerId || socket.playerId || socket.id;
 
     const roomState = this.rooms.get(roomCode);
     if (!roomState) return;
@@ -244,7 +244,7 @@ class GameSocketHandler {
         .upsert([{
           room_id: roomState.id,
           player_id: player.id,
-          user_id: null,
+          user_id: this.isUuid(player.user_id) ? player.user_id : null,
           question_id: question.id,
           selected_answer: selectedAnswer,
           selected_option: selectedAnswer,
@@ -267,7 +267,7 @@ class GameSocketHandler {
         .upsert([{
           room_id: roomState.id,
           player_id: player.id,
-          user_id: null,
+          user_id: this.isUuid(player.user_id) ? player.user_id : null,
           score: serverScore,
           updated_at: new Date()
         }], { onConflict: "room_id,player_id" });
@@ -277,7 +277,7 @@ class GameSocketHandler {
         .insert([{
           room_id: roomState.id,
           player_id: player.id,
-          user_id: null,
+          user_id: this.isUuid(player.user_id) ? player.user_id : null,
           question_id: question.id,
           sync_mode: roomState.syncMode,
           event_type: "answer-submission",
@@ -391,7 +391,7 @@ class GameSocketHandler {
 
       const { data: leaderboardData, error } = await supabaseAdmin
         .from("room_players")
-        .select("id, username, score, joined_at")
+        .select("id, user_id, username, score, joined_at")
         .eq("room_id", roomState.id)
         .order("score", { ascending: false })
         .order("joined_at", { ascending: true });
@@ -411,7 +411,7 @@ class GameSocketHandler {
           .insert(leaderboard.map((player) => ({
             room_id: roomState.id,
             player_id: player.id,
-            user_id: null,
+            user_id: this.isUuid(player.user_id) ? player.user_id : null,
             score: player.score,
             rank: player.rank
           })));
@@ -431,7 +431,11 @@ class GameSocketHandler {
 
   async handleQuizEnd(socket, { roomCode }) {
     const roomState = this.rooms.get(roomCode);
-    if (roomState && String(socket.playerId) !== String(roomState.hostId)) {
+    if (!roomState) {
+      socket.emit("error", { message: "Active game not found" });
+      return;
+    }
+    if (!socket.user?.userId || String(socket.user.userId) !== String(roomState.hostId)) {
       socket.emit("error", { message: "Only the host can end the quiz" });
       return;
     }
@@ -475,7 +479,7 @@ class GameSocketHandler {
         .insert([{
           room_id: roomState.id,
           player_id: player?.id || null,
-          user_id: null,
+          user_id: this.isUuid(player?.user_id) ? player.user_id : null,
           question_id: question?.id || null,
           sync_mode: roomState.syncMode,
           event_type: `rejected-${details.reason || "submission"}`,

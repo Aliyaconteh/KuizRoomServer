@@ -30,6 +30,10 @@ module.exports = (io, socket) => {
   // 🎯 CREATE ROOM EVENT
   socket.on("create-room", async ({ hostId, quizId, syncMode, delayLevel, delayMs }, callback = () => {}) => {
     try {
+      if (!socket.user?.userId || String(socket.user.userId) !== String(hostId)) {
+        throw new Error("Only an authenticated room creator can create the room");
+      }
+
       const room = await RoomService.createRoom(hostId, quizId, {
         syncMode,
         delayLevel,
@@ -37,7 +41,7 @@ module.exports = (io, socket) => {
       });
 
       socket.join(room.room_code);
-      socket.playerId = hostId;
+      socket.playerId = socket.user.userId;
 
       callback({
         success: true,
@@ -58,7 +62,10 @@ module.exports = (io, socket) => {
   // 🎯 JOIN ROOM EVENT
   socket.on("join-room", async ({ roomCode, player }, callback = () => {}) => {
     try {
-      const result = await RoomService.joinRoom(roomCode, player);
+      const trustedPlayer = socket.user?.userId
+        ? { ...player, id: socket.user.userId }
+        : player;
+      const result = await RoomService.joinRoom(roomCode, trustedPlayer);
 
       socket.join(roomCode);
       socket.playerId = result.player.user_id;

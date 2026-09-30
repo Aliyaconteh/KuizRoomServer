@@ -48,16 +48,16 @@ class SyncRepository {
         averageLatencyMs: 0,
         reconciliationCount: 0,
         mismatchCount: 0,
-        consistencyRatePct: 100,
+        consistencyRatePct: null,
         byMode: {
-          server: { count: 0, averageLatencyMs: 0, reconciliations: 0, consistencyPct: 100 },
-          optimistic: { count: 0, averageLatencyMs: 0, reconciliations: 0, consistencyPct: 100 }
+          server: { count: 0, averageLatencyMs: 0, reconciliations: 0, consistencyPct: null },
+          optimistic: { count: 0, averageLatencyMs: 0, reconciliations: 0, consistencyPct: null }
         },
         byDelay: {
-          "0ms": { serverLatency: 0, optimisticLatency: 0, consistencyPct: 100 },
-          "50ms": { serverLatency: 0, optimisticLatency: 0, consistencyPct: 100 },
-          "100ms": { serverLatency: 0, optimisticLatency: 0, consistencyPct: 100 },
-          "200ms": { serverLatency: 0, optimisticLatency: 0, consistencyPct: 100 }
+          "0ms": { serverLatency: null, optimisticLatency: null, consistencyPct: null, sampleCount: 0 },
+          "50ms": { serverLatency: null, optimisticLatency: null, consistencyPct: null, sampleCount: 0 },
+          "100ms": { serverLatency: null, optimisticLatency: null, consistencyPct: null, sampleCount: 0 },
+          "200ms": { serverLatency: null, optimisticLatency: null, consistencyPct: null, sampleCount: 0 }
         }
       };
     }
@@ -80,14 +80,17 @@ class SyncRepository {
       if (row.reconciliation_required) acc[mode].reconciliations += 1;
       if (Number(row.score_difference || 0) !== 0) acc[mode].mismatches += 1;
       return acc;
-    }, {});
+    }, {
+      server: { count: 0, latencyTotal: 0, reconciliations: 0, mismatches: 0 },
+      optimistic: { count: 0, latencyTotal: 0, reconciliations: 0, mismatches: 0 }
+    });
 
     Object.keys(byMode).forEach((mode) => {
       const count = byMode[mode].count;
       byMode[mode].averageLatencyMs = count ? Math.round(byMode[mode].latencyTotal / count) : 0;
       byMode[mode].consistencyPct = count
         ? Math.round(((count - byMode[mode].mismatches) / count) * 10000) / 100
-        : 100;
+        : null;
       delete byMode[mode].latencyTotal;
     });
 
@@ -133,9 +136,10 @@ class SyncRepository {
     delayBuckets.forEach((d) => {
       const item = byDelay[d];
       formattedByDelay[d] = {
-        serverLatency: item.serverCount ? Math.round(item.serverLatencyTotal / item.serverCount) : (d === "0ms" ? 18 : d === "50ms" ? 68 : d === "100ms" ? 118 : 220),
-        optimisticLatency: item.optimisticCount ? Math.round(item.optimisticLatencyTotal / item.optimisticCount) : (d === "0ms" ? 4 : d === "50ms" ? 6 : d === "100ms" ? 8 : 12),
-        consistencyPct: item.totalDelayCount ? Math.round(((item.totalDelayCount - item.mismatches) / item.totalDelayCount) * 10000) / 100 : 100
+        serverLatency: item.serverCount ? Math.round(item.serverLatencyTotal / item.serverCount) : null,
+        optimisticLatency: item.optimisticCount ? Math.round(item.optimisticLatencyTotal / item.optimisticCount) : null,
+        consistencyPct: item.totalDelayCount ? Math.round(((item.totalDelayCount - item.mismatches) / item.totalDelayCount) * 10000) / 100 : null,
+        sampleCount: item.totalDelayCount
       };
     });
 

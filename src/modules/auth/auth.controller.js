@@ -151,8 +151,8 @@ class AuthController {
       // Fetch player sessions
       const { data: sessionRows, error: sessionError } = await supabaseAdmin
         .from("session_results")
-        .select("id, room_id, score, rank, created_at, rooms(room_code, room_name)")
-        .eq("user_id", userId)
+        .select("id, room_id, score, rank, created_at, rooms(room_code, room_name), player:room_players!inner(user_id)")
+        .eq("player.user_id", userId)
         .order("created_at", { ascending: false });
       if (sessionError) throw sessionError;
 

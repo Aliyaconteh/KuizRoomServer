@@ -49,10 +49,10 @@ io.use(async (socket, next) => {
 
   try {
     // Verify token with your auth service
-    const decoded = require("jsonwebtoken").verify(token, process.env.JWT_SECRET || "your-secret");
+    const decoded = require("jsonwebtoken").verify(token, process.env.JWT_SECRET || "your-secret-key-change-in-production");
     socket.user = decoded;
     socket.isAuthenticated = true;
-    socket.metadata.userId = decoded.id;
+    socket.metadata.userId = decoded.userId;
   } catch (error) {
     socket.isAuthenticated = false;
     console.error("Auth error:", error.message);
