@@ -24,12 +24,17 @@ class AuthController {
     } catch (err) {
       console.error("[AUTH_SIGNUP] [ERROR]", err.message);
       const isValidation = err.message.includes("already registered") || err.message.includes("required");
-      return res.status(isValidation ? 400 : 500).json({
+      const status = err.code === "EMAIL_DELIVERY_FAILED" ? 503 : isValidation ? 400 : 500;
+      return res.status(status).json({
         success: false,
-        errorType: isValidation ? "VALIDATION_ERROR" : "SERVER_ERROR",
+        errorType: isValidation ? "VALIDATION_ERROR" : status === 503 ? "EMAIL_DELIVERY_ERROR" : "SERVER_ERROR",
         source: "Auth Service",
         message: err.message,
-        hint: isValidation ? "Try signing in or using a different email address." : "Please check database configuration.",
+        hint: isValidation
+          ? "Try signing in or using a different email address."
+          : status === 503
+            ? "Please check Gmail settings and try again."
+            : "Please check database configuration.",
         cause: err.cause?.message
       });
     }
@@ -57,14 +62,52 @@ class AuthController {
       });
     } catch (err) {
       console.error("[AUTH_LOGIN] [ERROR]", err.message);
-      const isAuthError = err.message.includes("Invalid email or password");
-      return res.status(isAuthError ? 401 : 500).json({
+      const isEmailUnverified = err.code === "EMAIL_NOT_VERIFIED";
+      const isAuthError = isEmailUnverified || err.message.includes("Invalid email or password");
+      return res.status(isEmailUnverified ? 403 : isAuthError ? 401 : 500).json({
         success: false,
-        errorType: isAuthError ? "AUTH_ERROR" : "SERVER_ERROR",
+        errorType: isEmailUnverified ? "EMAIL_NOT_VERIFIED" : isAuthError ? "AUTH_ERROR" : "SERVER_ERROR",
         source: "Auth Service",
         message: err.message,
-        hint: isAuthError ? "Please check your email and password and try again." : "Internal server or database error.",
+        hint: isEmailUnverified
+          ? "Open the verification link sent to your email, or request a new link."
+          : isAuthError
+            ? "Please check your email and password and try again."
+            : "Internal server or database error.",
         cause: err.cause?.message
+      });
+    }
+  }
+
+  async verifyEmail(req, res) {
+    try {
+      const data = await AuthService.verifyEmail(req.body?.token);
+      return res.json({ success: true, data });
+    } catch (err) {
+      console.error("[AUTH_EMAIL_VERIFY] [ERROR]", err.message);
+      const invalidLink = err.message === "Verification link is invalid or expired";
+      return res.status(invalidLink ? 400 : 500).json({
+        success: false,
+        message: invalidLink ? err.message : "Unable to verify email. Please try again later."
+      });
+    }
+  }
+
+  async resendVerificationEmail(req, res) {
+    try {
+      await AuthService.resendVerificationEmail(req.body?.email);
+      return res.json({
+        success: true,
+        message: "If the address belongs to an unverified account, a new verification link has been sent."
+      });
+    } catch (err) {
+      console.error("[AUTH_EMAIL_RESEND] [ERROR]", err.message);
+      const status = err.code === "EMAIL_DELIVERY_FAILED" ? 503 : 500;
+      return res.status(status).json({
+        success: false,
+        message: status === 503
+          ? "Unable to send verification email. Please try again later."
+          : "Unable to resend verification email. Please try again later."
       });
     }
   }
@@ -148,28 +191,51 @@ class AuthController {
         .eq("created_by", userId);
       if (quizError) throw quizError;
 
-      // Fetch player sessions
-      const { data: sessionRows, error: sessionError } = await supabaseAdmin
-        .from("session_results")
-        .select("id, room_id, score, rank, created_at, rooms(room_code, room_name), player:room_players!inner(user_id)")
-        .eq("player.user_id", userId)
-        .order("created_at", { ascending: false });
+      // Find the player's session records without relying on an unsupported
+      // relationship alias in Supabase's schema cache.
+      const { data: playerRows, error: playerError } = await supabaseAdmin
+        .from("room_players")
+        .select("id")
+        .eq("user_id", userId);
+      if (playerError) throw playerError;
+
+      const playerIds = (playerRows || []).map((row) => row.id);
+      const { data: sessionRows, error: sessionError } = playerIds.length
+        ? await supabaseAdmin
+            .from("session_results")
+            .select("id, room_id, score, rank, created_at")
+            .in("player_id", playerIds)
+            .order("created_at", { ascending: false })
+        : { data: [], error: null };
       if (sessionError) throw sessionError;
 
+      const roomIds = [...new Set((sessionRows || []).map((row) => row.room_id).filter(Boolean))];
+      const { data: rooms, error: roomsError } = roomIds.length
+        ? await supabaseAdmin
+            .from("rooms")
+            .select("id, room_code, room_name")
+            .in("id", roomIds)
+        : { data: [], error: null };
+      if (roomsError) throw roomsError;
+
+      const roomMap = new Map((rooms || []).map((room) => [room.id, room]));
       const gamesPlayed = sessionRows ? sessionRows.length : 0;
       const wins = sessionRows ? sessionRows.filter((r) => r.rank === 1).length : 0;
       const podiums = sessionRows ? sessionRows.filter((r) => r.rank >= 1 && r.rank <= 3).length : 0;
       const totalPoints = sessionRows ? sessionRows.reduce((sum, r) => sum + Number(r.score || 0), 0) : 0;
       const avgScore = gamesPlayed ? Math.round(totalPoints / gamesPlayed) : 0;
 
-      const history = (sessionRows || []).slice(0, 20).map((row) => ({
-        id: row.id,
-        roomCode: row.rooms?.room_code || "N/A",
-        roomName: row.rooms?.room_name || "Multiplayer Session",
-        score: Number(row.score || 0),
-        rank: row.rank || "-",
-        playedAt: row.created_at
-      }));
+      const history = (sessionRows || []).slice(0, 20).map((row) => {
+        const room = roomMap.get(row.room_id);
+        return {
+          id: row.id,
+          roomCode: room?.room_code || "N/A",
+          roomName: room?.room_name || "Multiplayer Session",
+          score: Number(row.score || 0),
+          rank: row.rank || "-",
+          playedAt: row.created_at
+        };
+      });
 
       return res.json({
         success: true,

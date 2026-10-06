@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
+const { corsOrigin } = require("../config/cors.config");
 const authRoutes = require("../modules/auth/auth.routes");
 const quizRoutes = require("../modules/quizzes/quiz.routes");
 const aiRoutes = require("../modules/ai/ai.routes");
@@ -19,7 +20,7 @@ app.use(morgan("dev"));
 
 // CORS setup
 const corsOptions = {
-  origin: (origin, callback) => callback(null, true),
+  origin: corsOrigin,
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],

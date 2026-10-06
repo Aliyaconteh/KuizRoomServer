@@ -3,18 +3,20 @@ require("dotenv").config({ path: path.join(__dirname, ".env") });
 
 const http = require("http");
 const { Server } = require("socket.io");
+const { corsOrigin } = require("./src/config/cors.config");
 
 const app = require("./src/app/app");
 const initSockets = require("./src/sockets");
 const { initializeDatabase } = require("./src/database/init");
 const { metricsCollector } = require("./src/utils/metricsCollector");
+const AuthService = require("./src/modules/auth/auth.service");
 
 const server = http.createServer(app);
 
 // Socket.IO setup with enhanced configuration
 const io = new Server(server, {
   cors: {
-    origin: (origin, callback) => callback(null, true),
+    origin: corsOrigin,
     methods: ["GET", "POST"],
     credentials: true
   },
@@ -48,8 +50,7 @@ io.use(async (socket, next) => {
   }
 
   try {
-    // Verify token with your auth service
-    const decoded = require("jsonwebtoken").verify(token, process.env.JWT_SECRET || "your-secret-key-change-in-production");
+    const decoded = AuthService.verifyToken(token);
     socket.user = decoded;
     socket.isAuthenticated = true;
     socket.metadata.userId = decoded.userId;

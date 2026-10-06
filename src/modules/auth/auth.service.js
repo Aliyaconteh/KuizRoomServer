@@ -1,8 +1,16 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const { supabase, supabaseAdmin } = require("../../config/supabase.config");
+const { sendVerificationEmail } = require("../../utils/email");
 
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
+const JWT_SECRET = process.env.JWT_SECRET
+  || (process.env.NODE_ENV === "production" ? null : "your-secret-key-change-in-production");
+const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
+if (!JWT_SECRET) {
+  throw new Error("JWT_SECRET is required in production");
+}
 
 class AuthService {
 
@@ -13,29 +21,34 @@ class AuthService {
       throw new Error("Email, password, and username are required");
     }
 
-    // Check if user already exists
-    const { data: existingUser } = await supabaseAdmin
+    const normalizedEmail = email.trim().toLowerCase();
+    const { data: existingUser, error: lookupError } = await supabaseAdmin
       .from("users")
       .select("id, email")
-      .eq("email", email)
+      .eq("email", normalizedEmail)
       .maybeSingle();
 
+    if (lookupError) throw new Error(`Signup failed: ${lookupError.message}`);
     if (existingUser) {
       throw new Error("Email already registered");
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
+    const verificationToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = this.hashVerificationToken(verificationToken);
+    const tokenExpiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS).toISOString();
 
-    // Create user in database
     const { data, error } = await supabaseAdmin
       .from("users")
       .insert([
         {
-          email,
+          email: normalizedEmail,
           username: username.trim(),
           password_hash: hashedPassword,
-          role: "host" // Host-specific role
+          role: "host",
+          email_verified: false,
+          email_verification_token_hash: tokenHash,
+          email_verification_expires_at: tokenExpiresAt
         }
       ])
       .select()
@@ -43,18 +56,22 @@ class AuthService {
 
     if (error) throw new Error(`Signup failed: ${error.message}`);
 
-    // Generate JWT token
-    const token = this.generateToken(data.id, data.email);
+    try {
+      await sendVerificationEmail(data.email, verificationToken);
+    } catch (err) {
+      const { error: deleteError } = await supabaseAdmin
+        .from("users")
+        .delete()
+        .eq("id", data.id);
+      if (deleteError) {
+        console.error("[AUTH_SIGNUP] Failed to remove account after email delivery failure:", deleteError);
+      }
+      throw err;
+    }
 
     return {
-      user: {
-        id: data.id,
-        email: data.email,
-        username: data.username,
-        role: data.role
-      },
-      token,
-      message: "Signup successful"
+      email: data.email,
+      message: "Account created. Check your email for a verification link."
     };
   }
 
@@ -68,7 +85,7 @@ class AuthService {
     const { data: user, error } = await supabaseAdmin
       .from("users")
       .select("*")
-      .eq("email", email)
+      .eq("email", email.trim().toLowerCase())
       .single();
 
     if (error) {
@@ -89,6 +106,12 @@ class AuthService {
 
     if (!isValidPassword) {
       throw new Error("Invalid email or password");
+    }
+
+    if (!user.email_verified) {
+      const error = new Error("Please verify your email before signing in");
+      error.code = "EMAIL_NOT_VERIFIED";
+      throw error;
     }
 
     // Generate JWT token
@@ -132,10 +155,15 @@ class AuthService {
 
     let user = existingUser;
 
-    if (user && user.username !== googleUsername) {
+    if (user) {
       const { data: updatedUser, error: updateError } = await supabaseAdmin
         .from("users")
-        .update({ username: googleUsername })
+        .update({
+          username: googleUsername,
+          email_verified: true,
+          email_verification_token_hash: null,
+          email_verification_expires_at: null
+        })
         .eq("id", user.id)
         .select("id, email, username, role")
         .single();
@@ -155,7 +183,8 @@ class AuthService {
             id: googleUser.id,
             email,
             username: googleUsername,
-            role: "host"
+            role: "host",
+            email_verified: true
           }
         ])
         .select("id, email, username, role")
@@ -180,6 +209,72 @@ class AuthService {
       token,
       message: "Google sign-in successful"
     };
+  }
+
+  async verifyEmail(token) {
+    if (!token || typeof token !== "string") {
+      throw new Error("Verification link is invalid or expired");
+    }
+
+    const now = new Date().toISOString();
+    const { data: user, error: lookupError } = await supabaseAdmin
+      .from("users")
+      .select("id")
+      .eq("email_verification_token_hash", this.hashVerificationToken(token))
+      .gt("email_verification_expires_at", now)
+      .eq("email_verified", false)
+      .maybeSingle();
+
+    if (lookupError) throw new Error(`Email verification failed: ${lookupError.message}`);
+    if (!user) throw new Error("Verification link is invalid or expired");
+
+    const { data: updatedUser, error: updateError } = await supabaseAdmin
+      .from("users")
+      .update({
+        email_verified: true,
+        email_verification_token_hash: null,
+        email_verification_expires_at: null
+      })
+      .eq("id", user.id)
+      .eq("email_verified", false)
+      .select("id")
+      .maybeSingle();
+
+    if (updateError) throw new Error(`Email verification failed: ${updateError.message}`);
+    if (!updatedUser) throw new Error("Verification link is invalid or expired");
+
+    return { message: "Email verified. You can now sign in." };
+  }
+
+  async resendVerificationEmail(email) {
+    if (!email || typeof email !== "string") return;
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const { data: user, error: lookupError } = await supabaseAdmin
+      .from("users")
+      .select("id, email")
+      .eq("email", normalizedEmail)
+      .eq("email_verified", false)
+      .maybeSingle();
+
+    if (lookupError) throw new Error(`Unable to resend verification email: ${lookupError.message}`);
+    if (!user) return;
+
+    const verificationToken = crypto.randomBytes(32).toString("hex");
+    const { error: updateError } = await supabaseAdmin
+      .from("users")
+      .update({
+        email_verification_token_hash: this.hashVerificationToken(verificationToken),
+        email_verification_expires_at: new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS).toISOString()
+      })
+      .eq("id", user.id);
+
+    if (updateError) throw new Error(`Unable to resend verification email: ${updateError.message}`);
+    await sendVerificationEmail(user.email, verificationToken);
+  }
+
+  hashVerificationToken(token) {
+    return crypto.createHash("sha256").update(token).digest("hex");
   }
 
   async updateProfile(userId, username) {
