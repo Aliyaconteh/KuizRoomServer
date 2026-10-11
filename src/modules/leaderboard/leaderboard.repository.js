@@ -25,13 +25,21 @@ class LeaderboardRepository {
     if (!room) throw new Error("Room not found");
 
     const { data, error } = await supabaseAdmin
-      .from("leaderboard")
-      .select("*")
+      .from("room_players")
+      .select("id, username, score, joined_at")
       .eq("room_id", room.id)
-      .order("score", { ascending: false });
+      .order("score", { ascending: false })
+      .order("joined_at", { ascending: true });
 
     if (error) throw error;
-    return data;
+
+    return (data || []).map((player, index) => ({
+      id: player.id,
+      player_id: player.id,
+      username: player.username || "Player",
+      score: Number(player.score || 0),
+      rank: index + 1
+    }));
   }
 
   async getFinalResults(roomCode) {

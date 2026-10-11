@@ -191,6 +191,13 @@ class AuthController {
         .eq("created_by", userId);
       if (quizError) throw quizError;
 
+      const { count: hostedGamesCount, error: hostedGamesError } = await supabaseAdmin
+        .from("rooms")
+        .select("id", { count: "exact", head: true })
+        .eq("host_id", userId)
+        .eq("status", "finished");
+      if (hostedGamesError) throw hostedGamesError;
+
       // Find the player's session records without relying on an unsupported
       // relationship alias in Supabase's schema cache.
       const { data: playerRows, error: playerError } = await supabaseAdmin
@@ -241,6 +248,7 @@ class AuthController {
         success: true,
         data: {
           gamesPlayed,
+          gamesHosted: hostedGamesCount || 0,
           quizzesCreated: quizCount || 0,
           wins,
           podiums,
