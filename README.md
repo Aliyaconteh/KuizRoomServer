@@ -25,11 +25,14 @@ JWT_SECRET=replace-with-a-long-random-secret
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
+GEMINI_API_KEY=your-gemini-api-key
 GMAIL_USER=your-address@gmail.com
 GMAIL_APP_PASSWORD=your-16-character-app-password
 EMAIL_FROM=KuizRoom <your-address@gmail.com>
 CLIENT_URL=http://localhost:5173
 ```
+
+AI quiz generation and tutor chat use Google's Interactions API with the `gemini-3.8-flash` model. Set `GEMINI_API_KEY` in the server environment; never expose it in the client.
 
 For Gmail delivery, enable 2-Step Verification on the sending Google account and create a Google App Password. Use that App Password as `GMAIL_APP_PASSWORD` (not the normal Gmail password). Set `CLIENT_URL` to the deployed frontend origin in production. Never commit real credentials.
 

@@ -1,17 +1,39 @@
 const { extractTextFromFile } = require("../../utils/fileExtractor");
 
-// Only current, live Gemini models. gemini-1.5-*, gemini-1.0-*, and
-// gemini-2.0-flash* have all been shut down (they now 404), and the old
-// list also had a typo ("gemini-2.5-flash-lit" -> "gemini-2.5-flash-lite").
-// Keeping dead models in this list just burns retries/latency before ever
-// reaching a working one.
-const GEMINI_MODELS = [
-  "gemini-3.5-flash",
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite"
-];
+const GEMINI_MODEL = "gemini-3.8-flash";
+const INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
 
 const QUIZ_FORMAT = `Return ONLY valid JSON with no markdown, no extra text.\n\nJSON format:\n{\n  "title": "",\n  "description": "",\n  "questions": [\n    {\n      "question": "",\n      "options": ["", "", "", ""],\n      "correctAnswer": 0,\n      "difficulty": "Easy",\n      "explanation": ""\n    }\n  ]\n}`;
+
+const QUIZ_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    title: { type: "string" },
+    description: { type: "string" },
+    questions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          question: { type: "string" },
+          options: {
+            type: "array",
+            items: { type: "string" },
+            minItems: 4,
+            maxItems: 4
+          },
+          correctAnswer: { type: "integer", minimum: 0, maximum: 3 },
+          difficulty: { type: "string" },
+          explanation: { type: "string" }
+        },
+        required: ["question", "options", "correctAnswer", "difficulty", "explanation"],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ["title", "description", "questions"],
+  additionalProperties: false
+};
 
 const CHAT_PROMPT = `You are KuizRoom Tutor, a private, patient study assistant for one learner.\nAnswer clearly and directly.\nWhen the learner asks for help, explain the concept step by step and use simple examples.\nWhen the learner asks for practice, you may ask one short question at a time and wait for the answer.\nDo not mention policies or say that you are an AI model.\nKeep responses focused on the learner's current topic and avoid unnecessary filler.`;
 
@@ -37,48 +59,35 @@ class AIService {
     }
   }
 
-  async callGemini({ prompt, json = false, maxOutputTokens = 2000, temperature = 0.7 }) {
-    let response;
-    let data;
-    let lastError;
-
-    for (const model of GEMINI_MODELS) {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-      response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": this.apiKey
+  async callInteractions({ prompt, json = false, maxOutputTokens = 2000, temperature = 0.7 }) {
+    const response = await fetch(INTERACTIONS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": this.apiKey
+      },
+      body: JSON.stringify({
+        model: GEMINI_MODEL,
+        input: prompt,
+        generation_config: {
+          temperature,
+          max_output_tokens: maxOutputTokens
         },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature,
-            maxOutputTokens,
-            ...(json ? { responseMimeType: "application/json" } : {})
-          }
-        })
-      });
+        ...(json
+          ? {
+              response_format: {
+                type: "text",
+                mime_type: "application/json",
+                schema: QUIZ_RESPONSE_SCHEMA
+              }
+            }
+          : {})
+      })
+    });
 
-      data = await response.json();
-      if (response.ok) {
-        break;
-      }
-
-      lastError = data.error?.message || `Gemini API returned status ${response.status}`;
-      const isRetryable = /high demand|quota|temporar|try again later|backend unavailable|unavailable/i.test(lastError);
-      if (!isRetryable) {
-        throw new Error(lastError);
-      }
-    }
-
-    if (!response?.ok) {
-      throw new Error(lastError || "Gemini API request failed.");
-    }
-
-    const finishReason = data?.candidates?.[0]?.finishReason;
-    if (finishReason && finishReason !== "STOP") {
-      console.warn(`[AI] Gemini finishReason was "${finishReason}" (expected "STOP") - output may be truncated or blocked.`);
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error?.message || `Gemini Interactions API returned status ${response.status}`);
     }
 
     return data;
@@ -100,7 +109,7 @@ class AIService {
       difficulty
     });
 
-    const data = await this.callGemini({
+    const data = await this.callInteractions({
       prompt,
       json: true,
       maxOutputTokens: computeMaxOutputTokens(numberOfQuestions),
@@ -110,7 +119,7 @@ class AIService {
     const rawOutput = this.extractTextFromGeminiResponse(data);
 
     if (!rawOutput) {
-      throw new Error("Invalid response from Gemini API.");
+      throw this.createMissingTextError(data);
     }
 
     const quiz = this.parseAndValidateAIOutput(rawOutput, numberOfQuestions);
@@ -128,7 +137,7 @@ class AIService {
       difficulty
     });
 
-    const data = await this.callGemini({
+    const data = await this.callInteractions({
       prompt,
       json: true,
       maxOutputTokens: computeMaxOutputTokens(numberOfQuestions),
@@ -137,7 +146,7 @@ class AIService {
 
     const rawOutput = this.extractTextFromGeminiResponse(data);
     if (!rawOutput) {
-      throw new Error("Invalid response from Gemini API.");
+      throw this.createMissingTextError(data);
     }
 
     return this.parseAndValidateAIOutput(rawOutput, numberOfQuestions);
@@ -157,7 +166,7 @@ class AIService {
 
     const prompt = `${CHAT_PROMPT}\n\nConversation so far:\n${transcript || "No previous conversation."}\n\nLearner: ${String(message).trim()}\nTutor:`;
 
-    const data = await this.callGemini({
+    const data = await this.callInteractions({
       prompt,
       json: false,
       maxOutputTokens: 1200,
@@ -166,17 +175,30 @@ class AIService {
 
     const reply = this.extractTextFromGeminiResponse(data);
     if (!reply || !reply.trim()) {
-      throw new Error("Invalid response from Gemini API.");
+      throw this.createMissingTextError(data);
     }
 
     return { reply: reply.trim() };
   }
 
   extractTextFromGeminiResponse(data) {
-    const candidate = data?.candidates?.[0] ?? data;
+    const candidate = data?.candidates?.[0] ?? data?.interaction ?? data;
     if (!candidate) return null;
 
     const collected = [];
+    const visited = new Set();
+    const outputFields = [
+      "output_text",
+      "outputText",
+      "model_output",
+      "outputs",
+      "output",
+      "content",
+      "parts",
+      "text",
+      "response",
+      "result"
+    ];
     const collect = (value) => {
       if (typeof value === "string") {
         collected.push(value);
@@ -187,31 +209,45 @@ class AIService {
         return;
       }
       if (value && typeof value === "object") {
-        if (typeof value.text === "string") {
-          collect(value.text);
-          return;
-        }
-        if (typeof value.outputText === "string") {
-          collect(value.outputText);
-          return;
-        }
-        if (typeof value.output === "string") {
-          collect(value.output);
-          return;
-        }
-        if (Array.isArray(value.parts)) {
-          collect(value.parts);
-          return;
-        }
-        if (value.content) {
-          collect(value.content);
-          return;
+        if (visited.has(value)) return;
+        visited.add(value);
+        for (const field of outputFields) {
+          if (value[field] !== undefined && value[field] !== null) {
+            const previousLength = collected.length;
+            collect(value[field]);
+            if (collected.length > previousLength) return;
+          }
         }
       }
     };
 
-    collect(candidate.content ?? candidate.output ?? candidate.text ?? candidate);
-    return collected.join("");
+    collect(candidate);
+    if (!collected.length && Array.isArray(candidate.steps)) {
+      candidate.steps
+        .filter((step) => step?.type === "model_output")
+        .forEach((step) => collect(step));
+    }
+    const text = collected.join("");
+    return text || null;
+  }
+
+  createMissingTextError(data) {
+    const fields = data && typeof data === "object" ? Object.keys(data).join(", ") : "none";
+    const status = typeof data?.status === "string" ? data.status : "unknown";
+    const output = data?.model_output ?? data?.output ?? data?.outputs;
+    const outputShape = Array.isArray(output)
+      ? `array (${output.length} item${output.length === 1 ? "" : "s"})`
+      : output === undefined || output === null
+        ? "missing"
+        : typeof output;
+
+    console.error(
+      `[AI] Gemini Interactions response contained no text (status=${status}, fields=${fields || "none"}, output=${outputShape}).`
+    );
+
+    return new Error(
+      `Gemini returned no text output (status: ${status}; response fields: ${fields || "none"}).`
+    );
   }
 
   extractJsonFromText(rawText) {
