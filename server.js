@@ -23,7 +23,7 @@ const io = new Server(server, {
   transports: ["websocket", "polling"],
   pingInterval: 25000,
   pingTimeout: 60000,
-  maxHttpBufferSize: 1e6,
+  maxHttpBufferSize: 64 * 1024,
 });
 
 // Socket.IO middleware for authentication and metrics

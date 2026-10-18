@@ -8,7 +8,7 @@ class SyncRepository {
 
     const { data, error } = await supabaseAdmin
       .from("synchronization_logs")
-      .select("*")
+      .select("sync_mode,event_type,delay_level,artificial_delay_ms,latency,predicted_score,server_score,reconciliation_required,score_difference,created_at")
       .eq("room_id", room.id)
       .order("created_at", { ascending: false })
       .limit(limit);
@@ -20,7 +20,7 @@ class SyncRepository {
   async getAllLogs(limit = 2000) {
     const { data, error } = await supabaseAdmin
       .from("synchronization_logs")
-      .select("*")
+      .select("sync_mode,event_type,delay_level,artificial_delay_ms,latency,predicted_score,server_score,reconciliation_required,score_difference,created_at")
       .order("created_at", { ascending: false })
       .limit(limit);
 

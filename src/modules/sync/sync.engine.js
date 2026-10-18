@@ -7,18 +7,16 @@ class SyncEngine {
     this.tempState = new Map();
   }
 
-  optimisticUpdate({ roomCode, playerId, userId, tempScore }) {
+  optimisticUpdate({ roomCode, playerId, tempScore }) {
     if (!this.tempState.has(roomCode)) {
-      this.tempState.set(roomCode, {});
+      this.tempState.set(roomCode, new Map());
     }
 
     const room = this.tempState.get(roomCode);
-    const participantId = playerId || userId;
-    room[participantId] = tempScore;
+    room.set(playerId, tempScore);
 
     this.io.to(roomCode).emit("optimistic-update", {
-      playerId: participantId,
-      userId,
+      playerId,
       score: tempScore
     });
   }
@@ -26,35 +24,61 @@ class SyncEngine {
   async serverValidate({
     roomCode,
     playerId,
-    userId,
-    question,
+    questionId,
     answer,
     responseStart = Date.now(),
     responseEnd = Date.now()
   }) {
     const room = await RoomRepository.getRoomByCode(roomCode);
     if (!room) throw new Error("Room not found");
-    if (!question) throw new Error("Question is required");
+    if (room.status !== "active") throw new Error("Room is not active");
+    if (!playerId || !questionId || typeof answer !== "string") {
+      throw new Error("Player, question, and answer are required");
+    }
 
-    const latency = responseEnd - responseStart;
+    const { data: player, error: playerError } = await supabaseAdmin
+      .from("room_players")
+      .select("id")
+      .eq("id", playerId)
+      .eq("room_id", room.id)
+      .maybeSingle();
+    if (playerError) throw playerError;
+    if (!player) throw new Error("Player is not registered in this room");
+
+    const { data: question, error: questionError } = await supabaseAdmin
+      .from("questions")
+      .select("id, correct_answer")
+      .eq("id", questionId)
+      .eq("quiz_id", room.quiz_id)
+      .maybeSingle();
+    if (questionError) throw questionError;
+    if (!question) throw new Error("Question does not belong to this room");
+
+    const suppliedStart = Number(responseStart);
+    const safeResponseStart = Number.isFinite(suppliedStart) &&
+      suppliedStart <= responseEnd &&
+      suppliedStart >= responseEnd - 60 * 60 * 1000
+      ? suppliedStart
+      : responseEnd;
+    const latency = Math.max(0, responseEnd - safeResponseStart);
     const isCorrect = question.correct_answer === answer;
     const serverScore = isCorrect ? 10 : 0;
 
-    await supabaseAdmin.from("sync_logs").insert([{
+    const { error: logError } = await supabaseAdmin.from("sync_logs").insert([{
       room_id: room.id,
-      player_id: playerId || null,
-      user_id: userId || null,
+      player_id: player.id,
+      user_id: null,
       sync_mode: "server",
       event_type: "confirm-answer",
-      client_timestamp: responseStart,
+      client_timestamp: safeResponseStart,
       server_timestamp: responseEnd,
       latency,
       server_score: serverScore
     }]);
+    if (logError) throw logError;
 
     this.io.to(roomCode).emit("server-confirmation", {
       playerId,
-      userId,
       correct: isCorrect,
       serverScore
     });
@@ -62,15 +86,24 @@ class SyncEngine {
     return serverScore;
   }
 
-  reconcile(roomCode, finalServerScores = {}) {
-    const optimistic = this.tempState.get(roomCode) || {};
+  async reconcile(roomCode) {
+    const roomRecord = await RoomRepository.getRoomByCode(roomCode);
+    if (!roomRecord) throw new Error("Room not found");
 
-    const results = Object.keys(finalServerScores).map((userId) => {
-      const serverScore = finalServerScores[userId];
-      const optimisticScore = optimistic[userId] || 0;
+    const { data: players, error } = await supabaseAdmin
+      .from("room_players")
+      .select("id, score")
+      .eq("room_id", roomRecord.id);
+    if (error) throw error;
+
+    const optimistic = this.tempState.get(roomCode) || new Map();
+
+    const results = (players || []).map((player) => {
+      const serverScore = Number(player.score || 0);
+      const optimisticScore = optimistic.get(player.id) || 0;
 
       return {
-        userId,
+        playerId: player.id,
         serverScore,
         optimisticScore,
         difference: optimisticScore - serverScore

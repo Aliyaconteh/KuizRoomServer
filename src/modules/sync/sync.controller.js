@@ -42,15 +42,10 @@ class SyncController {
       }
 
       const headers = [
-        "id",
-        "room_id",
-        "player_id",
         "sync_mode",
         "event_type",
         "delay_level",
         "artificial_delay_ms",
-        "client_timestamp",
-        "server_timestamp",
         "latency_ms",
         "predicted_score",
         "server_score",
@@ -62,15 +57,10 @@ class SyncController {
       const csvRows = [headers.join(",")];
       logs.forEach((log) => {
         const row = [
-          log.id || "",
-          log.room_id || "",
-          log.player_id || "",
           log.sync_mode || "",
           log.event_type || "",
           log.delay_level || "",
           log.artificial_delay_ms || 0,
-          log.client_timestamp || "",
-          log.server_timestamp || "",
           log.latency || 0,
           log.predicted_score || 0,
           log.server_score || 0,

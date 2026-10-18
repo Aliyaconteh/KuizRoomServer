@@ -27,6 +27,12 @@ class LeaderboardController {
     try {
       const room = await RoomRepository.getRoomByCode(req.params.roomCode);
       if (!room) throw new Error("Room not found");
+      if (room.status !== "finished") {
+        return res.status(403).json({
+          success: false,
+          message: "Question review is available after the quiz ends."
+        });
+      }
       const quiz = await QuizRepository.getQuizWithQuestions(room.quiz_id);
       return res.json({
         success: true,

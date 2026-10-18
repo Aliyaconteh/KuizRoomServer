@@ -1,7 +1,9 @@
+const crypto = require("crypto");
 const RoomRepository = require("./room.repository");
 const RoomUtils = require("./room.utils");
 const { ROOM_STATUS } = require("./room.constants");
 const { supabaseAdmin } = require("../../config/supabase.config");
+const AuthService = require("../auth/auth.service");
 
 class RoomService {
 
@@ -49,13 +51,13 @@ class RoomService {
   }
 
   // 🚪 JOIN ROOM
-  async joinRoom(roomCode, user) {
+  async joinRoom(roomCode, user, { authenticatedUserId } = {}) {
     if (!RoomUtils.isValidRoomCode(roomCode)) {
       throw new Error("Invalid room code");
     }
 
-    if (!user?.username) {
-      throw new Error("Username is required");
+    if (typeof user?.username !== "string" || !user.username.trim() || user.username.trim().length > 24) {
+      throw new Error("Username must be between 1 and 24 characters");
     }
 
     const room = await RoomRepository.getRoomByCode(roomCode);
@@ -65,31 +67,45 @@ class RoomService {
       throw new Error("Room is not accepting new players");
     }
 
-    const existingPlayer = await RoomRepository.getPlayerByUsername(
-      room.id,
-      user.username
-    );
+    const username = user.username.trim();
+    const guestClaims = !authenticatedUserId && user.guestToken
+      ? AuthService.verifyGuestPlayerToken(user.guestToken, roomCode)
+      : null;
+    const userId = authenticatedUserId || guestClaims?.userId || crypto.randomUUID();
+    const existingPlayer = await RoomRepository.getPlayerByUsername(room.id, username);
 
     if (existingPlayer) {
-      if (String(existingPlayer.user_id) !== String(user.id || user.userId || user.hostId || "")) {
+      if (
+        String(existingPlayer.user_id) !== String(userId) ||
+        (guestClaims && existingPlayer.id !== guestClaims.playerId)
+      ) {
         throw new Error("That username is already being used in this room");
       }
 
       return {
         room,
-        player: existingPlayer
+        player: existingPlayer,
+        guestToken: authenticatedUserId
+          ? null
+          : AuthService.createGuestPlayerToken(roomCode, existingPlayer.id, existingPlayer.user_id)
       };
     }
 
-    const userId = user.id || user.userId || user.hostId || `player_${Date.now()}`;
+    if (guestClaims) {
+      throw new Error("Guest player session is no longer valid");
+    }
+
     const player = await RoomRepository.addPlayer(room.id, {
       user_id: userId,
-      username: user.username
+      username
     });
 
     return {
       room,
-      player
+      player,
+      guestToken: authenticatedUserId
+        ? null
+        : AuthService.createGuestPlayerToken(roomCode, player.id, player.user_id)
     };
   }
 

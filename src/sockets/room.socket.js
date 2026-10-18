@@ -42,6 +42,7 @@ module.exports = (io, socket) => {
 
       socket.join(room.room_code);
       socket.playerId = socket.user.userId;
+      socket.boundRoomCode = room.room_code;
 
       callback({
         success: true,
@@ -62,19 +63,21 @@ module.exports = (io, socket) => {
   // 🎯 JOIN ROOM EVENT
   socket.on("join-room", async ({ roomCode, player }, callback = () => {}) => {
     try {
-      const trustedPlayer = socket.user?.userId
-        ? { ...player, id: socket.user.userId }
-        : player;
-      const result = await RoomService.joinRoom(roomCode, trustedPlayer);
+      const result = await RoomService.joinRoom(roomCode, player, {
+        authenticatedUserId: socket.user?.userId
+      });
 
       socket.join(roomCode);
       socket.playerId = result.player.user_id;
+      socket.playerRecordId = result.player.id;
+      socket.boundRoomCode = roomCode;
       socket.username = result.player.username;
 
       callback({
         success: true,
         room: result.room,
-        player: result.player
+        player: result.player,
+        guestToken: result.guestToken
       });
 
       await broadcastRoomUpdate(roomCode);

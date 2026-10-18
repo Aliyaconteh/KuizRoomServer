@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
+const rateLimit = require("express-rate-limit");
 const { corsOrigin } = require("../config/cors.config");
 const authRoutes = require("../modules/auth/auth.routes");
 const quizRoutes = require("../modules/quizzes/quiz.routes");
@@ -12,11 +13,19 @@ const syncRoutes = require("../modules/sync/sync.routes");
 
 const app = express();
 
+const trustProxyHops = process.env.TRUST_PROXY_HOPS === undefined
+  ? 0
+  : Number(process.env.TRUST_PROXY_HOPS);
+if (!Number.isInteger(trustProxyHops) || trustProxyHops < 0 || trustProxyHops > 10) {
+  throw new Error("TRUST_PROXY_HOPS must be an integer between 0 and 10");
+}
+app.set("trust proxy", trustProxyHops);
+
 // Security middleware
 app.use(helmet());
 
 // Logging
-app.use(morgan("dev"));
+app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
 // CORS setup
 const corsOptions = {
@@ -30,9 +39,19 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options(/(.*)/, cors(corsOptions));
 
+const apiRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path === "/health",
+  message: { success: false, message: "Too many requests. Please try again later." }
+});
+app.use(apiRateLimit);
+
 // Body parser
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "100kb" }));
+app.use(express.urlencoded({ extended: true, limit: "100kb", parameterLimit: 100 }));
 
 app.use("/auth", authRoutes);
 app.use("/api/quizzes", quizRoutes);
@@ -49,61 +68,22 @@ app.get("/health", (req, res) => {
   });
 });
 
-// 🌱 DEVELOPMENT: Seed database with test quiz (GET or POST)
-const seedDatabase = async (req, res) => {
-  try {
-    const QuizService = require("../modules/quizzes/quiz.service");
-    
-    // Create a test quiz
-    const quiz = await QuizService.createQuiz({
-      title: "Sample Science Quiz",
-      created_by: null
-    });
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
 
-    // Add test questions
-    const questions = [
-      {
-        quiz_id: quiz.id,
-        question: "What is the capital of France?",
-        options: ["London", "Berlin", "Paris", "Madrid"],
-        correct_answer: "Paris",
-        time_limit: 10
-      },
-      {
-        quiz_id: quiz.id,
-        question: "What is 2 + 2?",
-        options: ["3", "4", "5", "6"],
-        correct_answer: "4",
-        time_limit: 5
-      },
-      {
-        quiz_id: quiz.id,
-        question: "What is the largest planet in our solar system?",
-        options: ["Saturn", "Neptune", "Jupiter", "Uranus"],
-        correct_answer: "Jupiter",
-        time_limit: 15
-      }
-    ];
-
-    for (const q of questions) {
-      await QuizService.addQuestion(q);
-    }
-
-    res.json({
-      success: true,
-      message: "✅ Test quiz created successfully!",
-      quiz
-    });
-  } catch (err) {
-    console.error("Seed error:", err);
-    res.status(400).json({
-      success: false,
-      message: err.message
-    });
+  const status = Number.isInteger(err.status) && err.status >= 400 && err.status < 500
+    ? err.status
+    : 500;
+  if (status === 500) {
+    console.error("[HTTP_ERROR]", err);
   }
-};
 
-app.get("/api/seed", seedDatabase);
-app.post("/api/seed", seedDatabase);
+  return res.status(status).json({
+    success: false,
+    message: status === 413 ? "Request body is too large." : status === 500
+      ? "Internal server error."
+      : "Invalid request."
+  });
+});
 
 module.exports = app;

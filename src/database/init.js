@@ -4,7 +4,7 @@ const { supabaseAdmin } = require('../config/supabase.config');
  * Initialize database connection (Supabase)
  * Note: This function checks connectivity. Table creation should be run
  * manually via the Supabase SQL editor using `schema.sql` located in
- * `Backend/src/database/schema.sql`.
+ * `Server/src/database/schema.sql`.
  */
 async function initializeDatabase() {
   try {
@@ -16,7 +16,7 @@ async function initializeDatabase() {
 
     if (error) {
       console.warn('Supabase connection OK, but tables may not exist yet.');
-      console.warn('Please run Backend/src/database/schema.sql in the Supabase SQL editor.');
+      console.warn('Please run Server/src/database/schema.sql in the Supabase SQL editor.');
     } else {
       console.log('✅ Connected to Supabase (tables accessible)');
     }

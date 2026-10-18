@@ -1,11 +1,14 @@
+const crypto = require("crypto");
+
 class RoomUtils {
 
-  // 🔑 Generate 6-digit room code
+  // Generate an unpredictable six-character room code.
   static generateRoomCode() {
-    return Math.random()
-      .toString(36)
-      .substring(2, 8)
-      .toUpperCase();
+    const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    return Array.from(
+      { length: 6 },
+      () => alphabet[crypto.randomInt(alphabet.length)]
+    ).join("");
   }
 
   // 👤 Format player object
@@ -24,7 +27,7 @@ class RoomUtils {
 
   // 🎯 Validate room code
   static isValidRoomCode(code) {
-    return typeof code === "string" && code.length === 6;
+    return typeof code === "string" && /^[A-Z0-9]{6}$/.test(code);
   }
 
   static resolveDelay(level = "low", customMs) {

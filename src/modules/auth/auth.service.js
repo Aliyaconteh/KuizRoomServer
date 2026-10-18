@@ -4,24 +4,39 @@ const crypto = require("crypto");
 const { supabase, supabaseAdmin } = require("../../config/supabase.config");
 const { sendVerificationEmail } = require("../../utils/email");
 
-const JWT_SECRET = process.env.JWT_SECRET
-  || (process.env.NODE_ENV === "production" ? null : "your-secret-key-change-in-production");
+const JWT_SECRET = process.env.JWT_SECRET;
 const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
+function validationError(message) {
+  const error = new Error(message);
+  error.code = "VALIDATION_ERROR";
+  return error;
+}
+
 if (!JWT_SECRET) {
-  throw new Error("JWT_SECRET is required in production");
+  throw new Error("JWT_SECRET is required");
+}
+
+if (process.env.NODE_ENV === "production" && JWT_SECRET.length < 32) {
+  throw new Error("JWT_SECRET must be at least 32 characters in production");
 }
 
 class AuthService {
 
   //  SIGN UP - HOST ONLY
   async signup(email, password, username) {
-    // Validate input
-    if (!email || !password || !username) {
-      throw new Error("Email, password, and username are required");
+    if (
+      typeof email !== "string" || email.length > 254 ||
+      typeof password !== "string" || password.length < 8 || Buffer.byteLength(password, "utf8") > 72 ||
+      typeof username !== "string" || !username.trim() || username.trim().length > 32
+    ) {
+      throw validationError("Provide a valid email, a password of 8 to 72 bytes, and a username of 1 to 32 characters");
     }
 
     const normalizedEmail = email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      throw validationError("A valid email address is required");
+    }
     const { data: existingUser, error: lookupError } = await supabaseAdmin
       .from("users")
       .select("id, email")
@@ -77,8 +92,11 @@ class AuthService {
 
   //  LOGIN - HOST ONLY
   async login(email, password) {
-    if (!email || !password) {
-      throw new Error("Email and password are required");
+    if (
+      typeof email !== "string" || email.length > 254 ||
+      typeof password !== "string" || Buffer.byteLength(password, "utf8") > 72
+    ) {
+      throw validationError("Email and password are required");
     }
 
     // Get user from database
@@ -306,8 +324,8 @@ class AuthService {
       throw new Error("Current and new password are required");
     }
 
-    if (newPassword.length < 6) {
-      throw new Error("New password must be at least 6 characters");
+    if (typeof newPassword !== "string" || newPassword.length < 8 || Buffer.byteLength(newPassword, "utf8") > 72) {
+      throw validationError("New password must be between 8 and 72 bytes");
     }
 
     const { data: user, error: userError } = await supabaseAdmin
@@ -361,9 +379,38 @@ class AuthService {
   //  VERIFY TOKEN (for middleware)
   verifyToken(token) {
     try {
-      return jwt.verify(token, JWT_SECRET);
+      const decoded = jwt.verify(token, JWT_SECRET);
+      if (decoded.purpose) {
+        throw new Error("Invalid token purpose");
+      }
+      return decoded;
     } catch (err) {
       throw new Error("Invalid or expired token");
+    }
+  }
+
+  createGuestPlayerToken(roomCode, playerId, userId) {
+    return jwt.sign(
+      { purpose: "guest-player", roomCode, playerId, userId },
+      JWT_SECRET,
+      { expiresIn: "30d" }
+    );
+  }
+
+  verifyGuestPlayerToken(token, roomCode) {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      if (
+        decoded.purpose !== "guest-player" ||
+        decoded.roomCode !== roomCode ||
+        typeof decoded.playerId !== "string" ||
+        typeof decoded.userId !== "string"
+      ) {
+        throw new Error("Invalid guest player token");
+      }
+      return decoded;
+    } catch {
+      throw new Error("Invalid or expired guest player token");
     }
   }
 

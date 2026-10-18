@@ -10,12 +10,12 @@ const requiredEnv = [
 
 requiredEnv.forEach((key) => {
   if (!process.env[key]) {
-    throw new Error(`${key} is required in Backend/.env`);
+    throw new Error(`${key} is required in Server/.env`);
   }
 });
 
 if (!/^https?:\/\//i.test(process.env.SUPABASE_URL)) {
-  throw new Error("SUPABASE_URL must start with http:// or https:// in Backend/.env");
+  throw new Error("SUPABASE_URL must start with http:// or https:// in Server/.env");
 }
 
 // PUBLIC client (auth)

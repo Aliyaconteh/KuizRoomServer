@@ -23,19 +23,24 @@ class AuthController {
       });
     } catch (err) {
       console.error("[AUTH_SIGNUP] [ERROR]", err.message);
-      const isValidation = err.message.includes("already registered") || err.message.includes("required");
+      const isValidation = err.code === "VALIDATION_ERROR"
+        || err.message.includes("already registered")
+        || err.message.includes("required");
       const status = err.code === "EMAIL_DELIVERY_FAILED" ? 503 : isValidation ? 400 : 500;
       return res.status(status).json({
         success: false,
         errorType: isValidation ? "VALIDATION_ERROR" : status === 503 ? "EMAIL_DELIVERY_ERROR" : "SERVER_ERROR",
         source: "Auth Service",
-        message: err.message,
+        message: isValidation
+          ? err.message
+          : status === 503
+            ? "Unable to send the verification email. Please try again later."
+            : "Unable to create the account. Please try again later.",
         hint: isValidation
           ? "Try signing in or using a different email address."
           : status === 503
-            ? "Please check Gmail settings and try again."
-            : "Please check database configuration.",
-        cause: err.cause?.message
+            ? "Please try again later."
+            : "Please try again later."
       });
     }
   }
@@ -64,17 +69,21 @@ class AuthController {
       console.error("[AUTH_LOGIN] [ERROR]", err.message);
       const isEmailUnverified = err.code === "EMAIL_NOT_VERIFIED";
       const isAuthError = isEmailUnverified || err.message.includes("Invalid email or password");
-      return res.status(isEmailUnverified ? 403 : isAuthError ? 401 : 500).json({
+      const isValidation = err.code === "VALIDATION_ERROR";
+      return res.status(isEmailUnverified ? 403 : isAuthError ? 401 : isValidation ? 400 : 500).json({
         success: false,
-        errorType: isEmailUnverified ? "EMAIL_NOT_VERIFIED" : isAuthError ? "AUTH_ERROR" : "SERVER_ERROR",
+        errorType: isEmailUnverified ? "EMAIL_NOT_VERIFIED" : isAuthError ? "AUTH_ERROR" : isValidation ? "VALIDATION_ERROR" : "SERVER_ERROR",
         source: "Auth Service",
-        message: err.message,
+        message: isEmailUnverified || isAuthError || isValidation
+          ? err.message
+          : "Unable to sign in. Please try again later.",
         hint: isEmailUnverified
           ? "Open the verification link sent to your email, or request a new link."
           : isAuthError
             ? "Please check your email and password and try again."
-            : "Internal server or database error.",
-        cause: err.cause?.message
+            : isValidation
+              ? "Please provide a valid email and password."
+              : "Please try again later."
       });
     }
   }
@@ -137,8 +146,7 @@ class AuthController {
         success: false,
         errorType: "AUTH_ERROR",
         source: "Google Auth Service",
-        message: err.message,
-        cause: err.cause?.message
+        message: "Google sign-in failed. Please try again."
       });
     }
   }
