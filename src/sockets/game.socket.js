@@ -6,11 +6,12 @@ class GameSocketHandler {
   constructor(io) {
     this.io = io;
     this.rooms = new Map();
+    this.startingRooms = new Set();
   }
 
   registerEvents(socket) {
-    socket.on("start-game", (data) => this.handleStartGame(socket, data));
-    socket.on("start-quiz", (data) => this.handleStartGame(socket, data));
+    socket.on("start-game", (data, acknowledge) => this.handleStartGame(socket, data, acknowledge));
+    socket.on("start-quiz", (data, acknowledge) => this.handleStartGame(socket, data, acknowledge));
     socket.on("game:join", (data) => this.handleGameJoin(socket, data));
     socket.on("game:answer", (data) => this.handleAnswerSubmission(socket, data));
     socket.on("submit_answer", (data) => this.handleAnswerSubmission(socket, data));
@@ -21,7 +22,11 @@ class GameSocketHandler {
     socket.on("quiz-end", (data) => this.handleQuizEnd(socket, data));
   }
 
-  async handleStartGame(socket, data) {
+  async handleStartGame(socket, data, acknowledge) {
+    const respond = (result) => {
+      if (typeof acknowledge === "function") acknowledge(result);
+    };
+
     try {
       const { roomCode } = data;
 
@@ -33,13 +38,25 @@ class GameSocketHandler {
 
       if (roomError || !room) {
         socket.emit("error", { message: "Room not found" });
+        respond({ success: false, message: "Room not found" });
         return;
       }
 
       if (!socket.user?.userId || String(socket.user.userId) !== String(room.host_id)) {
         socket.emit("error", { message: "Only the person who created the room can start the quiz" });
+        respond({ success: false, message: "Only the room host can start the quiz" });
         return;
       }
+
+      if (this.rooms.get(roomCode)?.status === "active") {
+        respond({ success: true, alreadyStarted: true });
+        return;
+      }
+      if (this.startingRooms.has(roomCode)) {
+        respond({ success: false, message: "The quiz is already starting" });
+        return;
+      }
+      this.startingRooms.add(roomCode);
 
       const { data: questions, error: questionError } = await supabaseAdmin
         .from("questions")
@@ -48,6 +65,7 @@ class GameSocketHandler {
 
       if (questionError || !questions || questions.length === 0) {
         socket.emit("error", { message: "No questions found for this quiz" });
+        respond({ success: false, message: "No questions found for this quiz" });
         return;
       }
 
@@ -72,6 +90,7 @@ class GameSocketHandler {
         leaderboardTimer: null
       });
 
+      respond({ success: true });
       this.io.to(roomCode).emit("room:started", { roomCode });
 
       setTimeout(() => {
@@ -80,6 +99,9 @@ class GameSocketHandler {
     } catch (err) {
       console.error("Error starting game:", err);
       socket.emit("error", { message: "Failed to start game" });
+      respond({ success: false, message: "Failed to start game" });
+    } finally {
+      this.startingRooms.delete(data?.roomCode);
     }
   }
 
