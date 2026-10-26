@@ -33,11 +33,12 @@ class RoomUtils {
   static resolveDelay(level = "low", customMs) {
     const presets = {
       low: 0,
-      medium: 200,
-      high: 600
+      medium: 50,
+      high: 100,
+      custom: 200
     };
 
-    if (level === "custom") {
+    if (level === "custom" && customMs != null) {
       const ms = Number(customMs);
       if (!Number.isInteger(ms) || ms < 0 || ms > 5000) {
         throw new Error("Custom delay must be an integer between 0 and 5000ms");
