@@ -5,6 +5,7 @@ const { supabase, supabaseAdmin } = require("../../config/supabase.config");
 const { sendVerificationEmail } = require("../../utils/email");
 
 const JWT_SECRET = process.env.JWT_SECRET;
+const RESEARCHER_EMAIL = "officialkuizroom@gmail.com";
 const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 function validationError(message) {
@@ -22,6 +23,13 @@ if (process.env.NODE_ENV === "production" && JWT_SECRET.length < 32) {
 }
 
 class AuthService {
+
+  getEffectiveRole(user) {
+    if (user?.email?.trim().toLowerCase() === RESEARCHER_EMAIL) {
+      return "researcher";
+    }
+    return user?.role || "host";
+  }
 
   //  SIGN UP - HOST ONLY
   async signup(email, password, username) {
@@ -140,7 +148,7 @@ class AuthService {
         id: user.id,
         email: user.email,
         username: user.username,
-        role: user.role || "host"
+        role: this.getEffectiveRole(user)
       },
       token,
       message: "Login successful"
@@ -222,7 +230,7 @@ class AuthService {
         id: user.id,
         email: user.email,
         username: user.username,
-        role: user.role || "host"
+        role: this.getEffectiveRole(user)
       },
       token,
       message: "Google sign-in successful"
@@ -370,7 +378,7 @@ class AuthService {
         .single();
 
       if (error || !user) throw new Error("User not found");
-      return user;
+      return { ...user, role: this.getEffectiveRole(user) };
     } catch (err) {
       throw new Error("Invalid or expired token");
     }

@@ -2,39 +2,85 @@ const { supabaseAdmin } = require("../../config/supabase.config");
 const RoomRepository = require("../rooms/room.repository");
 
 class SyncRepository {
-  async getLogs(roomCode, limit = 100) {
+  async getLogs(roomCode, limit = 100, user) {
     const room = await RoomRepository.getRoomByCode(roomCode);
     if (!room) throw new Error("Room not found");
+    if (user?.role !== "researcher" && room.host_id !== user?.id) {
+      throw new Error("You do not have access to this room's analysis");
+    }
 
-    const { data, error } = await supabaseAdmin
-      .from("synchronization_logs")
-      .select("sync_mode,event_type,delay_level,artificial_delay_ms,latency,predicted_score,server_score,reconciliation_required,score_difference,created_at")
-      .eq("room_id", room.id)
-      .order("created_at", { ascending: false })
-      .limit(limit);
+    const logs = [];
+    const pageSize = 1000;
+    let start = 0;
+    while (true) {
+      let query = supabaseAdmin
+        .from("synchronization_logs")
+        .select("id,sync_mode,event_type,delay_level,artificial_delay_ms,latency,predicted_score,server_score,reconciliation_required,score_difference,created_at")
+        .eq("room_id", room.id)
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false });
 
-    if (error) throw error;
-    return data || [];
+      if (limit !== null) {
+        query = query.limit(limit);
+      } else {
+        query = query.range(start, start + pageSize - 1);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+      logs.push(...(data || []));
+      if (limit !== null || (data || []).length < pageSize) break;
+      start += pageSize;
+    }
+
+    return logs.map((log) => ({
+      ...log,
+      room_code: room.room_code,
+      room_name: room.room_name
+    }));
   }
 
-  async getAllLogs(limit = 2000) {
-    const { data, error } = await supabaseAdmin
-      .from("synchronization_logs")
-      .select("sync_mode,event_type,delay_level,artificial_delay_ms,latency,predicted_score,server_score,reconciliation_required,score_difference,created_at")
-      .order("created_at", { ascending: false })
-      .limit(limit);
+  async getAllLogs(user) {
+    const allLogs = [];
+    const pageSize = 1000;
+    let start = 0;
 
-    if (error) throw error;
-    return data || [];
+    while (true) {
+      let query = supabaseAdmin
+        .from("synchronization_logs")
+        .select("id,sync_mode,event_type,delay_level,artificial_delay_ms,latency,predicted_score,server_score,reconciliation_required,score_difference,created_at,rooms!inner(room_code,room_name,host_id)")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(start, start + pageSize - 1);
+
+      if (user?.role !== "researcher") {
+        query = query.eq("rooms.host_id", user.id);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const page = (data || []).map(({ rooms, ...log }) => ({
+        ...log,
+        room_code: rooms.room_code,
+        room_name: rooms.room_name
+      }));
+      allLogs.push(...page);
+
+      if (page.length < pageSize) break;
+      start += pageSize;
+    }
+
+    return allLogs;
   }
 
-  async getSummary(roomCode) {
-    const logs = await this.getLogs(roomCode, 1000);
+  async getSummary(roomCode, user) {
+    const logs = await this.getLogs(roomCode, null, user);
     return this.calculateSummaryStats(logs);
   }
 
-  async getOverview() {
-    const logs = await this.getAllLogs(2000);
+  async getOverview(user) {
+    const logs = await this.getAllLogs(user);
     return this.calculateSummaryStats(logs);
   }
 
@@ -54,10 +100,10 @@ class SyncRepository {
           optimistic: { count: 0, averageLatencyMs: 0, reconciliations: 0, consistencyPct: null }
         },
         byDelay: {
-          "0ms": { serverLatency: null, optimisticLatency: null, consistencyPct: null, sampleCount: 0 },
-          "50ms": { serverLatency: null, optimisticLatency: null, consistencyPct: null, sampleCount: 0 },
-          "100ms": { serverLatency: null, optimisticLatency: null, consistencyPct: null, sampleCount: 0 },
-          "200ms": { serverLatency: null, optimisticLatency: null, consistencyPct: null, sampleCount: 0 }
+          "0ms": { serverLatency: null, optimisticLatency: null, consistencyPct: null, serverConsistencyPct: null, optimisticConsistencyPct: null, serverReconciliations: 0, optimisticReconciliations: 0, sampleCount: 0 },
+          "50ms": { serverLatency: null, optimisticLatency: null, consistencyPct: null, serverConsistencyPct: null, optimisticConsistencyPct: null, serverReconciliations: 0, optimisticReconciliations: 0, sampleCount: 0 },
+          "100ms": { serverLatency: null, optimisticLatency: null, consistencyPct: null, serverConsistencyPct: null, optimisticConsistencyPct: null, serverReconciliations: 0, optimisticReconciliations: 0, sampleCount: 0 },
+          "200ms": { serverLatency: null, optimisticLatency: null, consistencyPct: null, serverConsistencyPct: null, optimisticConsistencyPct: null, serverReconciliations: 0, optimisticReconciliations: 0, sampleCount: 0 }
         }
       };
     }
@@ -100,8 +146,12 @@ class SyncRepository {
       byDelay[d] = {
         serverCount: 0,
         serverLatencyTotal: 0,
+        serverMismatches: 0,
+        serverReconciliations: 0,
         optimisticCount: 0,
         optimisticLatencyTotal: 0,
+        optimisticMismatches: 0,
+        optimisticReconciliations: 0,
         totalDelayCount: 0,
         mismatches: 0
       };
@@ -125,9 +175,13 @@ class SyncRepository {
         if (isOpt) {
           byDelay[bucket].optimisticCount += 1;
           byDelay[bucket].optimisticLatencyTotal += Number(row.latency || 0);
+          if (Number(row.score_difference || 0) !== 0) byDelay[bucket].optimisticMismatches += 1;
+          if (row.reconciliation_required) byDelay[bucket].optimisticReconciliations += 1;
         } else {
           byDelay[bucket].serverCount += 1;
           byDelay[bucket].serverLatencyTotal += Number(row.latency || 0);
+          if (Number(row.score_difference || 0) !== 0) byDelay[bucket].serverMismatches += 1;
+          if (row.reconciliation_required) byDelay[bucket].serverReconciliations += 1;
         }
       }
     });
@@ -139,6 +193,10 @@ class SyncRepository {
         serverLatency: item.serverCount ? Math.round(item.serverLatencyTotal / item.serverCount) : null,
         optimisticLatency: item.optimisticCount ? Math.round(item.optimisticLatencyTotal / item.optimisticCount) : null,
         consistencyPct: item.totalDelayCount ? Math.round(((item.totalDelayCount - item.mismatches) / item.totalDelayCount) * 10000) / 100 : null,
+        serverConsistencyPct: item.serverCount ? Math.round(((item.serverCount - item.serverMismatches) / item.serverCount) * 10000) / 100 : null,
+        optimisticConsistencyPct: item.optimisticCount ? Math.round(((item.optimisticCount - item.optimisticMismatches) / item.optimisticCount) * 10000) / 100 : null,
+        serverReconciliations: item.serverReconciliations,
+        optimisticReconciliations: item.optimisticReconciliations,
         sampleCount: item.totalDelayCount
       };
     });

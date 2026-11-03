@@ -152,9 +152,11 @@ class AIService {
     return this.parseAndValidateAIOutput(rawOutput, numberOfQuestions);
   }
 
-  async chatWithTutor({ hostId, message, history = [] }) {
+  async chatWithTutor({ hostId, message, history = [], documentText = "", documentName = "" }) {
     if (!hostId) throw new Error("Host authorization required");
-    if (!message || !String(message).trim()) throw new Error("A message is required.");
+    if (!String(message || "").trim() && !String(documentText || "").trim()) {
+      throw new Error("A message or readable document is required.");
+    }
 
     const transcript = Array.isArray(history)
       ? history
@@ -164,7 +166,11 @@ class AIService {
           .join("\n")
       : "";
 
-    const prompt = `${CHAT_PROMPT}\n\nConversation so far:\n${transcript || "No previous conversation."}\n\nLearner: ${String(message).trim()}\nTutor:`;
+    const documentContext = String(documentText || "").trim()
+      ? `\n\nUploaded document (${String(documentName || "document")}):\n${String(documentText).trim().slice(0, 30000)}${String(documentText).trim().length > 30000 ? "\n[Document text truncated for processing.]" : ""}`
+      : "";
+    const learnerMessage = String(message || "").trim() || "Please explain the uploaded document.";
+    const prompt = `${CHAT_PROMPT}\n\nConversation so far:\n${transcript || "No previous conversation."}${documentContext}\n\nLearner: ${learnerMessage}\nTutor:`;
 
     const data = await this.callInteractions({
       prompt,

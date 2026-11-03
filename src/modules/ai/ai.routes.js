@@ -68,7 +68,7 @@ const aiChatRateLimit = rateLimit({
 router.use(authMiddleware);
 router.use(aiRateLimit);
 router.post("/generate", aiGenerateRateLimit, upload.single("document"), (req, res) => AIController.generateQuiz(req, res));
-router.post("/chat", aiChatRateLimit, (req, res) => AIController.chat(req, res));
+router.post("/chat", aiChatRateLimit, upload.single("document"), (req, res) => AIController.chat(req, res));
 
 router.use((err, req, res, next) => {
   if (req.file?.path) {
