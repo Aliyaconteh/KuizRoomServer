@@ -192,6 +192,37 @@ class AuthController {
 
       const { supabaseAdmin } = require("../../config/supabase.config");
 
+      if (req.user?.role === "researcher") {
+        const [
+          { count: gamesPlayed, error: gamesError },
+          { count: quizzesCreated, error: quizzesError }
+        ] = await Promise.all([
+          supabaseAdmin
+            .from("rooms")
+            .select("id", { count: "exact", head: true })
+            .eq("status", "finished"),
+          supabaseAdmin
+            .from("quizzes")
+            .select("id", { count: "exact", head: true })
+        ]);
+        if (gamesError) throw gamesError;
+        if (quizzesError) throw quizzesError;
+
+        return res.json({
+          success: true,
+          data: {
+            gamesPlayed: gamesPlayed || 0,
+            gamesHosted: 0,
+            quizzesCreated: quizzesCreated || 0,
+            wins: 0,
+            podiums: 0,
+            totalPoints: 0,
+            avgScore: 0,
+            history: []
+          }
+        });
+      }
+
       // Count created quizzes
       const { count: quizCount, error: quizError } = await supabaseAdmin
         .from("quizzes")

@@ -1,6 +1,9 @@
 const { extractTextFromFile } = require("../../utils/fileExtractor");
 
-const GEMINI_MODEL = "gemini-3.8-flash";
+const GEMINI_MODELS = [
+  process.env.GEMINI_MODEL || "gemini-3.8-flash",
+  "gemini-3.6-flash"
+];
 const INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
 
 const QUIZ_FORMAT = `Return ONLY valid JSON with no markdown, no extra text.\n\nJSON format:\n{\n  "title": "",\n  "description": "",\n  "questions": [\n    {\n      "question": "",\n      "options": ["", "", "", ""],\n      "correctAnswer": 0,\n      "difficulty": "Easy",\n      "explanation": ""\n    }\n  ]\n}`;
@@ -60,37 +63,68 @@ class AIService {
   }
 
   async callInteractions({ prompt, json = false, maxOutputTokens = 2000, temperature = 0.7 }) {
-    const response = await fetch(INTERACTIONS_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": this.apiKey
-      },
-      body: JSON.stringify({
-        model: GEMINI_MODEL,
-        input: prompt,
-        generation_config: {
-          temperature,
-          max_output_tokens: maxOutputTokens
-        },
-        ...(json
-          ? {
-              response_format: {
-                type: "text",
-                mime_type: "application/json",
-                schema: QUIZ_RESPONSE_SCHEMA
-              }
-            }
-          : {})
-      })
-    });
+    let lastError;
+    const models = [...new Set(GEMINI_MODELS)];
 
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error?.message || `Gemini Interactions API returned status ${response.status}`);
+    for (const [modelIndex, model] of models.entries()) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await fetch(INTERACTIONS_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-goog-api-key": this.apiKey
+            },
+            body: JSON.stringify({
+              model,
+              input: prompt,
+              generation_config: {
+                temperature,
+                max_output_tokens: maxOutputTokens
+              },
+              ...(json
+                ? {
+                    response_format: {
+                      type: "text",
+                      mime_type: "application/json",
+                      schema: QUIZ_RESPONSE_SCHEMA
+                    }
+                  }
+                : {})
+            })
+          });
+
+          const data = await response.json();
+          if (!response.ok) {
+            const error = new Error(data.error?.message || `Gemini Interactions API returned status ${response.status}`);
+            error.status = response.status;
+            throw error;
+          }
+
+          return data;
+        } catch (error) {
+          lastError = error;
+          const transient = !error.status || error.status === 429 || error.status >= 500;
+          if (!transient) throw error;
+
+          console.warn(`[AI] ${model} request failed (${error.status || "network"}): ${error.message}`);
+          const isLastAttempt = attempt === 1;
+          const hasFallback = modelIndex < models.length - 1;
+          if (isLastAttempt && !hasFallback) break;
+          if (!isLastAttempt) {
+            await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+          }
+        }
+      }
     }
 
-    return data;
+    const unavailableError = new Error(lastError?.status === 429
+      ? "The AI service is rate-limited right now. Please try again shortly."
+      : lastError?.status
+        ? "The AI service is temporarily unavailable. Please try again shortly."
+        : "Could not connect to the AI service. Check the server connection and try again.");
+    unavailableError.status = 503;
+    throw unavailableError;
   }
 
   async generateQuizFromDocument({ hostId, documentPath, documentName, numberOfQuestions, difficulty }) {

@@ -78,7 +78,7 @@ class AIController {
       return res.status(200).json({ success: true, data: response });
     } catch (err) {
       console.error("[AI] chat error:", err.message);
-      return res.status(400).json({ success: false, message: err.message });
+      return res.status(err.status || 400).json({ success: false, message: err.message });
     } finally {
       if (document?.path) {
         await fs.unlink(document.path).catch((err) => {

@@ -3,6 +3,7 @@ const rateLimit = require("express-rate-limit");
 const router = express.Router();
 const AuthController = require("./auth.controller");
 const authMiddleware = require("../../middlewares/auth.middleware");
+const authenticatedMiddleware = require("../../middlewares/authenticated.middleware");
 
 const signupRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -46,7 +47,7 @@ router.post("/verify-email", verificationRateLimit, (req, res) => AuthController
 router.post("/resend-verification", resendVerificationRateLimit, (req, res) => AuthController.resendVerificationEmail(req, res));
 router.post("/google", googleAuthRateLimit, (req, res) => AuthController.googleLogin(req, res));
 router.get("/me", authMiddleware, (req, res) => AuthController.me(req, res));
-router.get("/stats", authMiddleware, (req, res) => AuthController.getStats(req, res));
+router.get("/stats", authenticatedMiddleware, (req, res) => AuthController.getStats(req, res));
 router.put("/profile", authMiddleware, (req, res) => AuthController.updateProfile(req, res));
 router.put("/password", authMiddleware, (req, res) => AuthController.changePassword(req, res));
 
